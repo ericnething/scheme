@@ -318,7 +318,6 @@ numericBinop :: (Integer -> Integer -> Integer) ->
 numericBinop op [] = throwError $ NumArgs 2 []
 numericBinop op x@[_] = throwError $ NumArgs 2 x
 numericBinop op xs = mapM unpackNum xs >>= return . Number . foldl1 op
--- numericBinop op xs = Number $ foldl1 op $ map unpackNum xs
 
 unpackNum :: LispVal -> ThrowsError Integer
 unpackNum (Number n) = return n
