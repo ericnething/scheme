@@ -14,6 +14,7 @@ import qualified Data.Foldable as F
 
 import Numeric
 import System.Environment
+import System.IO
 
 import Debug.Trace
 
@@ -24,8 +25,10 @@ main :: IO ()
 -- main = getArgs >>= print . eval . readExpr . head
 main = do
   args <- getArgs
-  evaled <- return $ liftM show $ readExpr (head args) >>= eval
-  putStrLn $ extractValue $ trapError evaled
+  case length args of
+    0 -> runRepl
+    1 -> evalAndPrint $ head args
+    otherwise -> putStrLn "Enter one argument to execute it, or zero arguments to run the REPL."
 
 -- Read an expression
 readExpr :: String -> ThrowsError LispVal
@@ -491,3 +494,36 @@ trapError action = catchError action (return . show)
 extractValue :: ThrowsError a -> a
 extractValue (Right val) = val
 
+-- REPL
+-------------------------------------------------------------------------------
+
+-- | Print the string and flush the stream
+flushStr :: String -> IO ()
+flushStr str = putStr str >> hFlush stdout
+
+-- | Read from the prompt
+readPrompt :: String -> IO String
+readPrompt prompt = flushStr prompt >> getLine
+
+-- | Evaluate the expression and catch any errors
+evalString :: String -> IO String
+evalString expr = return $ extractValue $
+                  trapError (liftM show $ readExpr expr >>= eval)
+
+-- | Evaluate the string and print the result
+evalAndPrint :: String -> IO ()
+evalAndPrint expr = evalString expr >>= putStrLn
+
+-- | This is an infinite loop that continuously reads from the prompt
+-- and executes the input until the predicate applied to the input
+-- is True.
+until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+until_ pred prompt action = do
+  result <- prompt
+  if pred result
+     then return ()
+     else action result >> until_ pred prompt action
+
+-- | Run the REPL
+runRepl :: IO ()
+runRepl = until_ (== "quit") (readPrompt "scheme> ") evalAndPrint
