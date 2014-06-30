@@ -275,13 +275,17 @@ apply f args = maybe (throwError $
 
 -- | Primitives
 primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
-primitives = [ ("+",         numericBinop (+))
+primitives = [
+             -- Arithmetic Operators
+               ("+",         numericBinop (+))
              , ("-",         numericBinop (-))
              , ("*",         numericBinop (*))
              , ("/",         numericBinop div)
              , ("mod",       numericBinop mod)
              , ("quotient",  numericBinop quot)
              , ("remainder", numericBinop rem)
+               
+             -- Boolean Operators
              , ("=",         numBoolBinop (==))
              , ("<",         numBoolBinop (<))
              , (">",         numBoolBinop (>))
@@ -290,11 +294,18 @@ primitives = [ ("+",         numericBinop (+))
              , ("<=",        numBoolBinop (<=))
              , ("&&",        boolBoolBinop (&&))
              , ("||",        boolBoolBinop (||))
+
+             -- String Operators
              , ("string=?",  strBoolBinop (==))
              , ("string<?",  strBoolBinop (<))
              , ("string>?",  strBoolBinop (>))
              , ("string<=?", strBoolBinop (<=))
              , ("string>=?", strBoolBinop (>=))
+
+             -- List Operators
+             , ("car", car)
+             , ("cdr", cdr)
+             , ("cons", cons)
              ]
 
 boolBinop :: (LispVal -> ThrowsError a) -> 
@@ -331,6 +342,52 @@ unpackStr notString = throwError $ TypeMismatch "string" notString
 unpackBool :: LispVal -> ThrowsError Bool
 unpackBool (Bool b) = return b
 unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
+
+-- List Primitives
+
+-- | `car` produces the first element of the list
+car :: [LispVal] -> ThrowsError LispVal
+-- (car '(a b c)) = a
+-- (car '(a)) = a
+car [List (x : xs)]         = return x
+-- (car '(a b . c)) = a
+car [DottedList (x : xs) _] = return x
+-- (car 'a) = error (not a list)
+car [badArg]                = throwError $ TypeMismatch "pair" badArg
+-- (car 'a 'b) = error (`car` takes only 1 argument)
+car badArgList              = throwError $ NumArgs 1 badArgList
+
+
+-- | `cdr` produces the rest of the list, excluding the first element
+cdr :: [LispVal] -> ThrowsError LispVal
+-- (cdr '(a b c)) = (b c)
+-- (cdr '(a b)) = (b)
+-- (cdr '(a)) = Nil
+cdr [List (x : xs)]         = return $ List xs
+-- (cdr '(a . b)) = b
+cdr [DottedList [_] x]      = return x
+-- (cdr '(a b . c)) = (b . c)
+cdr [DottedList (_ : xs) x] = return $ DottedList xs x
+-- (cdr 'a) = error (not a list)
+cdr [badArg]                = throwError $ TypeMismatch "pair" badArg
+-- (cdr 'a 'b) = error (`cdr` takes only 1 argument)
+cdr badArgList              = throwError $ NumArgs 1 badArgList
+
+
+-- | `cons` combines an element and a list
+cons :: [LispVal] -> ThrowsError LispVal
+-- (cons 'a 'Nil) = (a)
+cons [x, List []] = return $ List [x]
+-- (cons 'a '(b c)) = (a b c)
+cons [x, List xs] = return $ List (x : xs)
+-- (cons 'a '(b . c)) = (a b . c)
+cons [x, DottedList xs y] = return $ DottedList (x : xs) y
+-- (cons 'a 'b) = (a . b)
+-- (cons '(a b) 'c) = (a b . c)
+cons [x, y] = return $ DottedList [x] y
+-- (cons 'a) = error (`cons` takes only 2 arguments)
+-- (cons 'a '(b c) '(d e)) = error (`cons` takes only 2 arguments)
+cons badArgList = throwError $ NumArgs 2 badArgList
 
 -- Error.hs
 -------------------------------------------------------------------------------
