@@ -96,7 +96,7 @@ parseBool = char '#' >>
 -- #b -> binary
 -- Nothing -> decimal
 --
---  Using liftM (or fmap):
+-- Using liftM (or fmap):
 -- > parseNumber = liftM (Number . read) $ many1 digit
 --
 -- Using monadic bind (>>=):
@@ -157,6 +157,7 @@ parseComplex = do
   y <- (try parseFloat <|> parseNumber)
   return $ Complex (toDouble x :+ toDouble y)
 
+-- | Convert a Float or Number to a Double
 toDouble :: LispVal -> Double
 toDouble (Float f) = f
 toDouble (Number n) = fromIntegral n
@@ -204,7 +205,7 @@ parseUnQuote = do
   x <- parseExpr
   return $ List [Atom "unquote", x]
 
--- Parse an expression
+-- | Parse an expression
 parseExpr :: Parser LispVal
 parseExpr = F.asum [ parseAtom
                    , parseString
@@ -237,16 +238,17 @@ showVal (Bool True) = "#t"
 showVal (Bool False) = "#f"
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
 showVal (DottedList initL lastL) = 
-  concat ["(", unwordsList initL, ".", showVal lastL, ")"]
+  concat ["(", unwordsList initL, " . ", showVal lastL, ")"]
 showVal (Float n) = show n
 showVal (Ratio n) = show (numerator n) ++ "/" ++ show (denominator n)
 showVal (Complex n) = show (realPart n) ++ "+" ++ show (imagPart n) ++ "i"
 showVal (Char c) = '#':'\\':c:[]
 
+-- | helper for showVal
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
 
--- | Evaluator
+-- | Evaluate an expression
 eval :: LispVal -> ThrowsError LispVal
 eval val@(String _)  = return val
 eval val@(Char _)    = return val
@@ -308,6 +310,7 @@ primitives = [
              , ("cons", cons)
              ]
 
+-- | Apply a boolean binary operator
 boolBinop :: (LispVal -> ThrowsError a) -> 
              (a -> a -> Bool) -> 
              [LispVal] -> ThrowsError LispVal
@@ -318,27 +321,34 @@ boolBinop unpacker op xs
     right <- unpacker $ last xs
     return $ Bool $ left `op` right
 
+-- | boolBinop for Number
 numBoolBinop = boolBinop unpackNum
 
+-- | boolBinop for String
 strBoolBinop = boolBinop unpackStr
 
+-- | boolBinop for Bool
 boolBoolBinop = boolBinop unpackBool
 
+-- | Apply an arithmetic binary operator
 numericBinop :: (Integer -> Integer -> Integer) -> 
                 [LispVal] -> ThrowsError LispVal
 numericBinop op [] = throwError $ NumArgs 2 []
 numericBinop op x@[_] = throwError $ NumArgs 2 x
 numericBinop op xs = mapM unpackNum xs >>= return . Number . foldl1 op
 
+-- | Unpack a Number from a LispVal into an Integer
 unpackNum :: LispVal -> ThrowsError Integer
 unpackNum (Number n) = return n
 unpackNum (List [n]) = unpackNum n
 unpackNum notNum = throwError $ TypeMismatch "number" notNum
 
+-- | Unpack a String from a LispVal into a String
 unpackStr :: LispVal -> ThrowsError String
 unpackStr (String s) = return s
 unpackStr notString = throwError $ TypeMismatch "string" notString
 
+-- | Unpack a Bool from a LispVal into a Bool
 unpackBool :: LispVal -> ThrowsError Bool
 unpackBool (Bool b) = return b
 unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
@@ -346,48 +356,73 @@ unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
 -- List Primitives
 
 -- | `car` produces the first element of the list
+-- 
+-- for a List:
+-- > (car '(a b c)) = a
+-- > (car '(a)) = a
+--
+-- for a DottedList:
+-- > (car '(a b . c)) = a
+--
+-- Error checking:
+-- > (car 'a) = error (not a list)
+-- > (car 'a 'b) = error (`car` takes only 1 argument)
+
 car :: [LispVal] -> ThrowsError LispVal
--- (car '(a b c)) = a
--- (car '(a)) = a
 car [List (x : xs)]         = return x
--- (car '(a b . c)) = a
 car [DottedList (x : xs) _] = return x
--- (car 'a) = error (not a list)
 car [badArg]                = throwError $ TypeMismatch "pair" badArg
--- (car 'a 'b) = error (`car` takes only 1 argument)
 car badArgList              = throwError $ NumArgs 1 badArgList
 
 
 -- | `cdr` produces the rest of the list, excluding the first element
+--
+-- for a List:
+-- > (cdr '(a b c)) = (b c)
+-- > (cdr '(a b)) = (b)
+-- > (cdr '(a)) = Nil
+--
+-- for a DottedList:
+-- > (cdr '(a . b)) = b
+-- > (cdr '(a b . c)) = (b . c)
+--
+-- Error checking:
+-- > (cdr 'a) = error (not a list)
+-- > (cdr 'a 'b) = error (`cdr` takes only 1 argument)
+
 cdr :: [LispVal] -> ThrowsError LispVal
--- (cdr '(a b c)) = (b c)
--- (cdr '(a b)) = (b)
--- (cdr '(a)) = Nil
 cdr [List (x : xs)]         = return $ List xs
--- (cdr '(a . b)) = b
 cdr [DottedList [_] x]      = return x
--- (cdr '(a b . c)) = (b . c)
 cdr [DottedList (_ : xs) x] = return $ DottedList xs x
--- (cdr 'a) = error (not a list)
 cdr [badArg]                = throwError $ TypeMismatch "pair" badArg
--- (cdr 'a 'b) = error (`cdr` takes only 1 argument)
 cdr badArgList              = throwError $ NumArgs 1 badArgList
 
 
--- | `cons` combines an element and a list
+-- | `cons` places an element at the front of a list
+--
+-- for an element and an empty List:
+-- > (cons 'a 'Nil) = (a)
+--
+-- for an element and a non-empty List:
+-- > (cons 'a '(b c)) = (a b c)
+--
+-- for an element and a DottedList:
+-- > (cons 'a '(b . c)) = (a b . c)
+--
+-- for two elements:
+-- > (cons 'a 'b) = (a . b)
+-- > (cons '(a b) 'c) = (a b . c)
+--
+-- Error checking:
+-- > (cons 'a) = error (`cons` takes only 2 arguments)
+-- > (cons 'a '(b c) '(d e)) = error (`cons` takes only 2 arguments)
+
 cons :: [LispVal] -> ThrowsError LispVal
--- (cons 'a 'Nil) = (a)
-cons [x, List []] = return $ List [x]
--- (cons 'a '(b c)) = (a b c)
-cons [x, List xs] = return $ List (x : xs)
--- (cons 'a '(b . c)) = (a b . c)
+cons [x, List []]         = return $ List [x]
+cons [x, List xs]         = return $ List (x : xs)
 cons [x, DottedList xs y] = return $ DottedList (x : xs) y
--- (cons 'a 'b) = (a . b)
--- (cons '(a b) 'c) = (a b . c)
-cons [x, y] = return $ DottedList [x] y
--- (cons 'a) = error (`cons` takes only 2 arguments)
--- (cons 'a '(b c) '(d e)) = error (`cons` takes only 2 arguments)
-cons badArgList = throwError $ NumArgs 2 badArgList
+cons [x, y]               = return $ DottedList [x] y
+cons badArgList           = throwError $ NumArgs 2 badArgList
 
 -- Error.hs
 -------------------------------------------------------------------------------
@@ -406,6 +441,9 @@ instance Error LispError where
 
 instance Show LispError where show = showError
 
+type ThrowsError = Either LispError
+
+-- | show Error
 showError :: LispError -> String
 showError (UnboundVar msg var) = concat [msg, ": ", var]
 showError (BadSpecialForm msg form) = concat [msg, ": ", show form]
@@ -417,10 +455,10 @@ showError (TypeMismatch expected found) =
   concat ["Invalid type: expected ", expected, ", found ", show found]
 showError (Parser parseErr) = concat ["Parse error at ", show parseErr]
 
-type ThrowsError = Either LispError
-
+-- | trap Errors and `show` them
 trapError action = catchError action (return . show)
 
+-- | Extract the value from an Error
 extractValue :: ThrowsError a -> a
 extractValue (Right val) = val
 
