@@ -287,17 +287,24 @@ primitives = [
              , ("quotient",  numericBinop quot)
              , ("remainder", numericBinop rem)
                
-             -- Boolean Operators
+             -- Numeric Boolean Operators
              , ("=",         numBoolBinop (==))
              , ("<",         numBoolBinop (<))
              , (">",         numBoolBinop (>))
              , ("/=",        numBoolBinop (/=))
              , (">=",        numBoolBinop (>=))
              , ("<=",        numBoolBinop (<=))
+
+             -- Boolean Boolean Operators
              , ("&&",        boolBoolBinop (&&))
              , ("||",        boolBoolBinop (||))
 
-             -- String Operators
+             -- Equivalence Boolean Operators
+             , ("eq?", eqv)
+             , ("eqv?", eqv)
+             , ("equal?", eqv)
+
+             -- String Boolean Operators
              , ("string=?",  strBoolBinop (==))
              , ("string<?",  strBoolBinop (<))
              , ("string>?",  strBoolBinop (>))
@@ -352,6 +359,28 @@ unpackStr notString = throwError $ TypeMismatch "string" notString
 unpackBool :: LispVal -> ThrowsError Bool
 unpackBool (Bool b) = return b
 unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
+
+-- | Test for equivalence
+eqv :: [LispVal] -> ThrowsError LispVal
+eqv [(Bool x), (Bool y)] = return $ Bool $ x == y
+eqv [(Number x), (Number y)] = return $ Bool $ x == y
+eqv [(String x), (String y)] = return $ Bool $ x == y
+eqv [(Atom x), (Atom y)]     = return $ Bool $ x == y
+
+-- If the List equivalents of the DottedLists are equal,
+-- then they are equal.
+eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs ++ [x],
+                                                  List $ ys ++ [y]]
+-- If two Lists have equal length and all of their elements
+-- are equal, then the two Lists are equal.
+eqv [(List x), (List y)]     = return $ Bool $ (length x == length y) &&
+                               (all eqvPair $ zip x y)
+  where eqvPair (x, y) = case eqv [x, y] of
+          Left err -> False
+          Right (Bool val) -> val
+
+eqv [_, _]                   = return $ Bool False
+eqv badArgList               = throwError $ NumArgs 2 badArgList
 
 -- List Primitives
 
