@@ -51,6 +51,16 @@ data LispVal = Atom String
              | Char Char
              | String String
              | Bool Bool
+             | PrimitiveFunc ([LispVal] -> ThrowsError LispVal)
+             | Func {
+                    -- names of parameters in the function body
+                      params :: [String]
+                    -- name of variable-length list of arguments, if it exists
+                    , vararg :: (Maybe String)
+                    -- body of function
+                    , body :: [LispVal]
+                    -- environment local to function
+                    , closure :: Env }
 
 -- | Parser for Scheme identifiers
 symbol :: Parser Char
@@ -248,6 +258,13 @@ showVal (Float n) = show n
 showVal (Ratio n) = show (numerator n) ++ "/" ++ show (denominator n)
 showVal (Complex n) = show (realPart n) ++ "+" ++ show (imagPart n) ++ "i"
 showVal (Char c) = '#':'\\':c:[]
+showVal (PrimitiveFunc _) = "<primitive>"
+showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
+  concat [ "(lambda ("
+         , unwords (map show args)
+         , (case varargs of Nothing -> ""
+                            Just arg -> " . " ++ arg)
+         ,") ...)" ]
 
 -- | helper for showVal
 unwordsList :: [LispVal] -> String
@@ -286,8 +303,28 @@ eval env (List [Atom "set!", Atom var, form]) =
 eval env (List [Atom "define", Atom var, form]) =
   eval env form >>= defineVar env var
 
+-- define function
+eval env (List (Atom "define" : List (Atom var : params) : body)) =
+  makeNormalFunc env params body >>= defineVar env var
+
+eval env (List (Atom "define" :
+                DottedList (Atom var : params) varargs : body)) =
+  makeVarArgs varargs env params body >>= defineVar env var
+
+eval env (List (Atom "lambda" : List params : body)) =
+  makeNormalFunc env params body
+
+eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+  makeVarArgs varargs env params body
+
+eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+  makeVarArgs varargs env [] body
+
 -- function application
-eval env (List (Atom f : args)) = mapM (eval env) args >>= liftThrows . apply f
+eval env (List (function : args)) = do
+  func <- eval env function
+  argVals <- mapM (eval env) args
+  apply func argVals
 
 -- general List and DottedList
 eval env val@(DottedList _ _) = return val
@@ -298,11 +335,33 @@ eval env val@(List _)         = return val
 --                                "Unrecognized special form" badForm)
 
 -- | Function Application
-apply :: String -> [LispVal] -> ThrowsError LispVal
-apply f args = maybe (throwError $
-                      NotFunction "Unrecognized primitive function args" f)
-               ($ args)
-               (lookup f primitives)
+-- 
+-- Given PrimitiveFunc:
+--     Extract function and apply it to the arguments.
+-- 
+-- Given Func:
+--     If the number of parameters is not equal to the number
+-- of provided arguments and there is no variable-length
+-- list of arguments, throw error (not enough arguments).
+--     Otherwise, bind the arguments within the environment
+-- and evaluate the body of the function.
+
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+
+apply (PrimitiveFunc f) args = liftThrows $ f args
+
+apply (Func params varargs body closure) args =
+  if num params /= num args && varargs == Nothing
+     then throwError $ NumArgs (num params) args
+     else (liftIO $ bindVars closure $ zip params args) >>=
+          bindVarArgs varargs >>= evalBody
+  where remainingArgs = drop (length params) args
+        num = toInteger . length
+        evalBody env = liftM last $ mapM (eval env) body
+        bindVarArgs arg env = case arg of
+          Just argName -> liftIO $
+                          bindVars env [(argName, List $ remainingArgs)]
+          Nothing -> return env
 
 -- | Primitives
 primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
@@ -552,11 +611,12 @@ until_ pred prompt action = do
 
 -- | Run the REPL
 runRepl :: IO ()
-runRepl = nullEnv >>= until_ (== "quit") (readPrompt "scheme> ") . evalAndPrint
+runRepl = primitiveBindings >>=
+          until_ (== "quit") (readPrompt "scheme> ") . evalAndPrint
 
 -- | Run a single expression
 runOne :: String -> IO ()
-runOne expr = nullEnv >>= flip evalAndPrint expr
+runOne expr = primitiveBindings >>= flip evalAndPrint expr
 
 -- Env is a map of Strings to LispVals
 type Env = IORef [(String, IORef LispVal)]
@@ -634,4 +694,22 @@ bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
   where extendEnv bindings env = liftM (++ env) (mapM addBindings bindings)
         addBindings (var, value) = do ref <- newIORef value
                                       return (var, ref)
+
+-- | Bind the primitive functions
+primitiveBindings :: IO Env
+primitiveBindings = nullEnv >>=
+                    (flip bindVars $ map makePrimitiveFunc primitives)
+  where makePrimitiveFunc (var, f) = (var, PrimitiveFunc f)
+
+-- | Helper for function creation
+makeFunc varargs env params body =
+  return $ Func (map showVal params) varargs body env
+
+-- | Helper for creating a function without a variable-length list
+-- of arguments.
+makeNormalFunc = makeFunc Nothing
+
+-- | Helper for creating a function with a variable-length list
+-- of arguments.
+makeVarArgs = makeFunc . Just . showVal
 
