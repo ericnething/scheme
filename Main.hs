@@ -134,20 +134,6 @@ parseNumber = liftM Number (
         readBin = readInt 2 (`elem` "01") (fromJust . (`elemIndex` "01"))
         liftNum f t = liftM (convert . f) $ many1 t
 
--- parseNumber :: Parser LispVal
--- parseNumber = do
-  -- number <- many1 (oneOf "ox#abcdef" <|> digit)
-  -- return $ case number of
-  --   '#':rest -> case map toLower rest of
-  --     'o':num -> convert (readOct num)
-  --     'x':num -> convert (readHex num)
-  --     'd':num -> convert (readDec num)
-  --     'b':num -> convert (readBin num)
-  --     _ -> Atom number
-  --   _ -> convert (readDec number)
-  --   where convert = (Number . fst . fromMaybe (0,"") . listToMaybe)
-  --         readBin = readInt 2 (`elem` "01") (fromJust . (`elemIndex` "01"))
-
 -- | Parser for Floats
 parseFloat :: Parser LispVal
 parseFloat = do
