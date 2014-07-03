@@ -19,11 +19,16 @@ import System.IO
 
 import Debug.Trace
 
+-- Debug
+-------------------------------------------------------------------------------
+
 -- | `help` for debugging
 help = flip trace
 
+-- Main
+-------------------------------------------------------------------------------
+
 main :: IO ()
--- main = getArgs >>= print . eval . readExpr . head
 main = do
   args <- getArgs
   case length args of
@@ -32,13 +37,19 @@ main = do
     otherwise -> putStrLn ("Enter one argument to execute it, " ++
                            "or zero arguments to run the REPL.")
 
--- Read an expression
-readExpr :: String -> ThrowsError LispVal
-readExpr input = case parse parseExpr "lisp" input of
-  Left err -> throwError $ Parser err
+-- | Read an expression (used in REPL)
+readExpr = readOrThrow parseExpr
+
+-- | Read an expression (used to load files)
+readExprList = readOrThrow (endBy parseExpr spaces)
+
+-- | helper for reading expressions
+readOrThrow :: Parser a -> String -> ThrowsError a
+readOrThrow parser input = case parse parser "lisp" input of
+  Left err  -> throwError $ Parser err
   Right val -> return val
 
--- Parsers.hs 
+-- Parsers
 -------------------------------------------------------------------------------
 
 data LispVal = Atom String
@@ -61,6 +72,8 @@ data LispVal = Atom String
                     , body :: [LispVal]
                     -- environment local to function
                     , closure :: Env }
+             | IOFunc ([LispVal] -> IOThrowsError LispVal)
+             | Port Handle
 
 -- | Parser for Scheme identifiers
 symbol :: Parser Char
@@ -225,7 +238,7 @@ parseExpr = F.asum [ parseAtom
                         return x
                    ]
 
--- Eval.hs
+-- Evaluation
 -------------------------------------------------------------------------------
 
 instance Show LispVal where show = showVal
@@ -251,6 +264,8 @@ showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
          , (case varargs of Nothing -> ""
                             Just arg -> " . " ++ arg)
          ,") ...)" ]
+showVal (IOFunc _) = "<IO primitive>"
+showVal (Port _) = "<IO port>"
 
 -- | helper for showVal
 unwordsList :: [LispVal] -> String
@@ -348,6 +363,8 @@ apply (Func params varargs body closure) args =
           Just argName -> liftIO $
                           bindVars env [(argName, List $ remainingArgs)]
           Nothing -> return env
+
+apply (IOFunc func) args = func args
 
 -- | Primitives
 primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
@@ -527,7 +544,7 @@ cons [x, DottedList xs y] = return $ DottedList (x : xs) y
 cons [x, y]               = return $ DottedList [x] y
 cons badArgList           = throwError $ NumArgs 2 badArgList
 
--- Error.hs
+-- Error Handling
 -------------------------------------------------------------------------------
 
 data LispError = NumArgs Integer [LispVal]
