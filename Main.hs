@@ -31,11 +31,8 @@ help = flip trace
 main :: IO ()
 main = do
   args <- getArgs
-  case length args of
-    0 -> runRepl
-    1 -> runOne $ head args
-    otherwise -> putStrLn ("Enter one argument to execute it, " ++
-                           "or zero arguments to run the REPL.")
+  if null args then runRepl
+    else runOne $ args
 
 -- | Read an expression (used in REPL)
 readExpr = readOrThrow parseExpr
@@ -321,6 +318,10 @@ eval env (List (Atom "lambda" : DottedList params varargs : body)) =
 eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
   makeVarArgs varargs env [] body
 
+-- load
+eval env (List [Atom "load", String filename]) =
+  load filename >>= liftM last . mapM (eval env)
+
 -- function application
 eval env (List (function : args)) = do
   func <- eval env function
@@ -328,12 +329,12 @@ eval env (List (function : args)) = do
   apply func argVals
 
 -- general List and DottedList
-eval env val@(DottedList _ _) = return val
-eval env val@(List _)         = return val
+-- eval env val@(DottedList _ _) = return val
+-- eval env val@(List _)         = return val
 
 -- Error
--- eval env badForm = throwError (BadSpecialForm
---                                "Unrecognized special form" badForm)
+eval env badForm = throwError (BadSpecialForm
+                               "Unrecognized special form" badForm)
 
 -- | Function Application
 -- 
@@ -617,9 +618,20 @@ runRepl :: IO ()
 runRepl = primitiveBindings >>=
           until_ (== "quit") (readPrompt "scheme> ") . evalAndPrint
 
--- | Run a single expression
-runOne :: String -> IO ()
-runOne expr = primitiveBindings >>= flip evalAndPrint expr
+-- | Run a program
+-- 
+-- Passes the primitive bindings to `bindVars` and adds a variable
+-- named `args` bound to a list of string versions of everything
+-- excpet the first argument, which is the name of the file to run.
+-- Then creates `(load filename)` in Scheme format and evaluates it.
+
+runOne :: [String] -> IO ()
+runOne args = do
+  env <- primitiveBindings >>= flip bindVars
+         [("args", List $ map String $ drop 1 args)]
+  (runIOThrows $ liftM show $ eval env
+   (List [Atom "load", String (head args)]))
+    >>= hPutStrLn stderr
 
 -- Env is a map of Strings to LispVals
 type Env = IORef [(String, IORef LispVal)]
@@ -701,8 +713,9 @@ bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
 -- | Bind the primitive functions
 primitiveBindings :: IO Env
 primitiveBindings = nullEnv >>=
-                    (flip bindVars $ map makePrimitiveFunc primitives)
-  where makePrimitiveFunc (var, f) = (var, PrimitiveFunc f)
+                    (flip bindVars $ map (make IOFunc) ioPrimitives
+                     ++ map (make PrimitiveFunc) primitives)
+  where make constructor (var, func) = (var, constructor func)
 
 -- | Helper for function creation
 makeFunc varargs env params body =
@@ -715,4 +728,60 @@ makeNormalFunc = makeFunc Nothing
 -- | Helper for creating a function with a variable-length list
 -- of arguments.
 makeVarArgs = makeFunc . Just . showVal
+
+-- File Input/Output
+-------------------------------------------------------------------------------
+
+-- | Destructure the argument list of the IO Primitives into a
+-- form that `apply` accepts.
+applyProc :: [LispVal] -> IOThrowsError LispVal
+applyProc [func, List args] = apply func args
+applyProc (func : args)     = apply func args
+
+-- | IO Primitives
+ioPrimitives :: [(String, [LispVal] -> IOThrowsError LispVal)]
+ioPrimitives = [ ("apply",             applyProc)
+               , ("open-input-file",   makePort ReadMode)
+               , ("open-output-file",  makePort WriteMode)
+               , ("close-input-file",  closePort)
+               , ("close-output-file", closePort)
+               , ("read",              readProc)
+               , ("write",             writeProc)
+               , ("read-contents",     readContents)
+               , ("read-all",          readAll)]
+
+-- | Open a file
+-- Note: wraps `openFile`
+makePort :: IOMode -> [LispVal] -> IOThrowsError LispVal
+makePort mode [String filename] = liftM Port $ liftIO $ openFile filename mode
+
+-- | Close a file
+-- Note: wraps `hClose`
+closePort :: [LispVal] -> IOThrowsError LispVal
+closePort [Port port] = liftIO $ hClose port >> (return $ Bool True)
+closePort _           = return $ Bool False
+
+-- | Read a file
+-- Note: wraps `hGetLine` and sends result to `parseExpr`
+readProc :: [LispVal] -> IOThrowsError LispVal
+readProc []          = readProc [Port stdin]
+readProc [Port port] = (liftIO $ hGetLine port) >>= liftThrows . readExpr
+
+-- | Write to a file
+writeProc :: [LispVal] -> IOThrowsError LispVal
+writeProc [obj] = writeProc [obj, Port stdout]
+writeProc [obj, Port port] = liftIO $ hPrint port obj >> (return $ Bool True)
+
+-- | Read entire file into memory
+-- Note: wraps `readFile`
+readContents :: [LispVal] -> IOThrowsError LispVal
+readContents [String filename] = liftM String $ liftIO $ readFile filename
+
+-- | helper for readAll
+load :: String -> IOThrowsError [LispVal]
+load filename = (liftIO $ readFile filename) >>= liftThrows . readExprList
+
+-- | readAll
+readAll :: [LispVal] -> IOThrowsError LispVal
+readAll [String filename] = liftM List $ load filename
 
