@@ -83,20 +83,20 @@ spaces = skipMany1 space
 -- | Parser for Strings
 parseString :: Parser LispVal
 parseString = do
-  char "\""
+  char '"'
   x <- many (escaped <|> noneOf "\"")
-  char "\""
+  char '"'
   return (String x)
     where escaped = char '\\' >> choice (map convert codes)
           convert (c,x) = char c >> return x
-          codes = [("\\", "\\")
-                  ,("\"", "\"")
+          codes = [('\\', '\\')
+                  ,('\"', '\"')
                   ,('/', '/')
-                  ,('b', "\b")
-                  ,('n', "\n")
-                  ,('f', "\f")
-                  ,('r', "\r")
-                  ,('t', "\t")]
+                  ,('b', '\b')
+                  ,('n', '\n')
+                  ,('f', '\f')
+                  ,('r', '\r')
+                  ,('t', '\t')]
 
 -- | Parser for Atoms
 parseAtom :: Parser LispVal
@@ -156,7 +156,7 @@ parseFloat = do
 parseRatio :: Parser LispVal
 parseRatio = do
   x <- many1 digit
-  char "/"
+  char '/'
   y <- many1 digit
   return $ Ratio ((read x) % (read y))
 
