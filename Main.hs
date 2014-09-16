@@ -83,9 +83,9 @@ spaces = skipMany1 space
 -- | Parser for Strings
 parseString :: Parser LispVal
 parseString = do
-  char '"'
+  char '\"'
   x <- many (escaped <|> noneOf "\"")
-  char '"'
+  char '\"'
   return (String x)
     where escaped = char '\\' >> choice (map convert codes)
           convert (c,x) = char c >> return x
